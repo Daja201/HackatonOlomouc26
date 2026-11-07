@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk"
-import { object, string, url } from "zod";
+import { temperatureDay } from "@/lib/mock/temperatureDay"
+// import { json, object, string, url } from "zod";
 
 const client = new Anthropic()
 
@@ -28,18 +29,57 @@ export async function GET(request) {
 
     const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Prague"})
 
-    const message = await client.messages.create({
+    const messages = [{ role: "user", content: question }]
+
+    const first = await client.messages.create({
         model: "claude-haiku-5-5",
         max_tokens: 1024,
         system: `Dnes je ${today}. Odpovídáš na otázky o počasí. Čísla nikdy nevymýšlej, data získej nástrojem.`,
         tools,
-        messages: [{ role: "user", content: question }],
+        messages,
     })
+
+    const toolUse = first.content.find((block) => block.type === "tool_use")
+
+    if (!toolUse) {
+        return Response.json({ question, stop_reason: first.stop_reason, content: first.constent })
+    }
+
+    const result = temperatureDay(toolUse.input.city, toolUse.input.date)
+
+    messages.push({ role: "assistant", content: first.content })
+    messages.push({
+        role: "user",
+        content: [
+            {
+                type: "tool_result",
+                tool_use_id: toolUse.id,
+                content: JSON.stringify(result)
+            }
+        ]
+    })
+
+    const second = await client.messages.create({
+        model: "claude-haiku-5-5",
+        max_tokens: 1024,
+        system: `Dnes je ${today}. Odpovídáš na otázky o počasí. Čísla nikdy nevymýšlej, data získej nástrojem.`,
+        tools, 
+        messages
+    })
+
+    let text = ""
+
+    for (const block of second.content) {
+        if (block.type === "text") {
+            text += block.text
+        }
+    }
+
 
     return Response.json({ 
         question,
-        today,
-        stop_reason: message.stop_reason,
-        content: message.content
+        toolCall: toolUse.input,
+        result,
+        text
     })
 }
